@@ -3,18 +3,19 @@ const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const { google } = require('googleapis');
-const Anthropic = require('@anthropic-ai/sdk');
+const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 const WALCHEM_ROOT_FOLDER_ID = process.env.WALCHEM_ROOT_FOLDER_ID || '';
 const MAX_DOCS_PER_QUERY = parseInt(process.env.MAX_DOCS_PER_QUERY || '2', 10);
-const MAX_PDF_BYTES = 32 * 1024 * 1024;
+const MAX_PDF_BYTES = 30 * 1024 * 1024;
 
 const STOPWORDS = new Set([
   'de','la','el','en','y','a','los','las','un','una','que','con','para','por','se','es','del','al',
@@ -102,6 +103,13 @@ function rankFiles(files, keywords) {
     .map(x => x.file);
 }
 
+function historyToGeminiContents(history) {
+  return history.map(turn => ({
+    role: turn.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: turn.content }]
+  }));
+}
+
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, history = [] } = req.body;
@@ -127,25 +135,22 @@ app.post('/api/chat', async (req, res) => {
     });
     candidates = rankFiles(candidates, keywords).slice(0, MAX_DOCS_PER_QUERY);
 
-    const documentBlocks = [];
+    const documentParts = [];
     const sources = [];
 
     for (const file of candidates) {
       try {
         const sizeBytes = file.size ? parseInt(file.size, 10) : 0;
         if (sizeBytes && sizeBytes > MAX_PDF_BYTES) {
-          console.warn(`Se omite ${file.name}: pesa ${(sizeBytes / 1e6).toFixed(1)}MB, supera el limite de 32MB por documento`);
+          console.warn(`Se omite ${file.name}: pesa ${(sizeBytes / 1e6).toFixed(1)}MB, supera el limite`);
           continue;
         }
         const buffer = await downloadPdfBuffer(drive, file.id);
-        documentBlocks.push({
-          type: 'document',
-          source: {
-            type: 'base64',
-            media_type: 'application/pdf',
+        documentParts.push({
+          inlineData: {
+            mimeType: 'application/pdf',
             data: buffer.toString('base64')
-          },
-          citations: { enabled: true }
+          }
         });
         sources.push({
           title: file.name,
@@ -160,31 +165,32 @@ app.post('/api/chat', async (req, res) => {
 
 Tenes dos fuentes de informacion disponibles:
 1. Los documentos PDF originales adjuntos a este mensaje (si hay alguno) - son los manuales reales de Walchem, con su texto, tablas, diagramas y esquemas completos. Esta es tu fuente PRINCIPAL y mas confiable para specs, procedimientos y troubleshooting.
-2. Busqueda web, disponible como herramienta - usala para complementar cuando haga falta informacion que no este en los documentos adjuntos.
+2. Busqueda web (Google Search), disponible como herramienta - usala para complementar cuando haga falta informacion que no este en los documentos adjuntos.
 
 Respondé de forma directa y natural, combinando ambas fuentes segun corresponda, sin aclarar de cual proviene cada dato. Si genuinamente no encontras informacion confiable en ningun lado, decilo con honestidad en vez de inventar valores tecnicos, rangos o procedimientos de seguridad.
 
 Se conciso, directo y accionable, como si hablaras con un tecnico que necesita resolver algo ahora. Usa listas numeradas para procedimientos paso a paso. Respondé siempre en español.`;
 
-    const userContent = [
-      ...documentBlocks,
-      { type: 'text', text: message }
+    const currentTurnParts = [
+      ...documentParts,
+      { text: message }
     ];
 
-    const apiMessages = [...history, { role: 'user', content: userContent }];
+    const contents = [
+      ...historyToGeminiContents(history),
+      { role: 'user', parts: currentTurnParts }
+    ];
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
-      system: systemPrompt,
-      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
-      messages: apiMessages
+    const response = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents,
+      config: {
+        systemInstruction: systemPrompt,
+        tools: [{ googleSearch: {} }]
+      }
     });
 
-    const replyText = response.content
-      .filter(b => b.type === 'text')
-      .map(b => b.text)
-      .join('\n\n');
+    const replyText = response.text || 'No pude generar una respuesta.';
 
     res.json({ reply: replyText, sources });
   } catch (err) {
@@ -197,5 +203,5 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Walchem Tech Assistant escuchando en puerto ${PORT}`);
+  console.log(`Walchem Tech Assistant (Gemini) escuchando en puerto ${PORT}`);
 });
