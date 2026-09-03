@@ -3,7 +3,6 @@ const express = require('express');
 const path = require('path');
 const cors = require('cors');
 const { google } = require('googleapis');
-const pdfParse = require('pdf-parse');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
@@ -14,8 +13,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const WALCHEM_ROOT_FOLDER_ID = process.env.WALCHEM_ROOT_FOLDER_ID || '';
-const MAX_CHARS_PER_DOC = parseInt(process.env.MAX_CHARS_PER_DOC || '150000', 10);
-const MAX_DOCS_PER_QUERY = parseInt(process.env.MAX_DOCS_PER_QUERY || '3', 10);
+const MAX_DOCS_PER_QUERY = parseInt(process.env.MAX_DOCS_PER_QUERY || '2', 10);
+const MAX_PDF_BYTES = 32 * 1024 * 1024;
 
 const STOPWORDS = new Set([
   'de','la','el','en','y','a','los','las','un','una','que','con','para','por','se','es','del','al',
@@ -80,14 +79,12 @@ async function searchDrivePdfs(drive, keywords) {
   return Array.from(resultsMap.values());
 }
 
-async function downloadPdfText(drive, fileId) {
+async function downloadPdfBuffer(drive, fileId) {
   const res = await drive.files.get(
     { fileId, alt: 'media' },
     { responseType: 'arraybuffer' }
   );
-  const buffer = Buffer.from(res.data);
-  const parsed = await pdfParse(buffer);
-  return parsed.text;
+  return Buffer.from(res.data);
 }
 
 function rankFiles(files, keywords) {
@@ -130,16 +127,26 @@ app.post('/api/chat', async (req, res) => {
     });
     candidates = rankFiles(candidates, keywords).slice(0, MAX_DOCS_PER_QUERY);
 
-    const contextBlocks = [];
+    const documentBlocks = [];
     const sources = [];
 
     for (const file of candidates) {
       try {
-        const text = await downloadPdfText(drive, file.id);
-        const truncated = text.length > MAX_CHARS_PER_DOC;
-        contextBlocks.push(
-          `### ${file.name}${truncated ? ' (truncado por longitud)' : ''}\n${text.slice(0, MAX_CHARS_PER_DOC)}`
-        );
+        const sizeBytes = file.size ? parseInt(file.size, 10) : 0;
+        if (sizeBytes && sizeBytes > MAX_PDF_BYTES) {
+          console.warn(`Se omite ${file.name}: pesa ${(sizeBytes / 1e6).toFixed(1)}MB, supera el limite de 32MB por documento`);
+          continue;
+        }
+        const buffer = await downloadPdfBuffer(drive, file.id);
+        documentBlocks.push({
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: 'application/pdf',
+            data: buffer.toString('base64')
+          },
+          citations: { enabled: true }
+        });
         sources.push({
           title: file.name,
           url: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`
@@ -151,18 +158,29 @@ app.post('/api/chat', async (req, res) => {
 
     const systemPrompt = `Sos el asistente tecnico interno de Filsa, para el equipo que da soporte a equipos Walchem (bombas dosificadoras, controladores, sensores y accesorios de tratamiento de agua).
 
-Respondé la consulta del técnico usando la información de los documentos completos que te paso a continuación (es el texto íntegro extraído en el momento desde los PDF originales en Google Drive, sin resumir ni modificar). Si el contexto no alcanza para responder con precisión, decilo con honestidad en vez de inventar valores técnicos, rangos o procedimientos de seguridad.
+Tenes dos fuentes de informacion disponibles:
+1. Los documentos PDF originales adjuntos a este mensaje (si hay alguno) - son los manuales reales de Walchem, con su texto, tablas, diagramas y esquemas completos. Esta es tu fuente PRINCIPAL y mas confiable para specs, procedimientos y troubleshooting.
+2. Busqueda web, disponible como herramienta - usala solo cuando necesites complementar con informacion que genuinamente no este en los documentos adjuntos (ej. una actualizacion reciente de Walchem/Iwaki, un dato de contexto general de ingenieria, o confirmar algo cuando no se adjunto ningun documento relevante).
 
-Sé conciso, directo y accionable, como si hablaras con un técnico que necesita resolver algo ahora. Usá listas numeradas para procedimientos paso a paso. Respondé en español.
+Reglas:
+- Si citas informacion de un PDF adjunto, respondé con precision tecnica de ese documento.
+- Si complementas con busqueda web, aclaralo explicitamente en la respuesta (ej. "Según el sitio de Walchem...").
+- Si no hay documentos adjuntos relevantes y la busqueda web tampoco encuentra nada solido, decilo con honestidad en vez de inventar valores tecnicos, rangos o procedimientos de seguridad.
 
-${contextBlocks.length ? 'DOCUMENTOS COMPLETOS ENCONTRADOS:\n\n' + contextBlocks.join('\n\n---\n\n') : '(No se encontraron documentos relevantes en Drive para esta consulta.)'}`;
+Se conciso, directo y accionable, como si hablaras con un tecnico que necesita resolver algo ahora. Usa listas numeradas para procedimientos paso a paso. Respondé siempre en español.${documentBlocks.length === 0 ? '\n\n(No se encontraron documentos relevantes en Drive para esta consulta - respondé con lo que sepas y/o usando búsqueda web, dejando claro que no viene de un manual específico.)' : ''}`;
 
-    const apiMessages = [...history, { role: 'user', content: message }];
+    const userContent = [
+      ...documentBlocks,
+      { type: 'text', text: message }
+    ];
+
+    const apiMessages = [...history, { role: 'user', content: userContent }];
 
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1500,
+      max_tokens: 2000,
       system: systemPrompt,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }],
       messages: apiMessages
     });
 
