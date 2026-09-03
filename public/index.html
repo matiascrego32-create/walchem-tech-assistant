@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Soporte Técnico Walchem | Filsa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#0B3D62; --navy-dark:#082C48; --blue:#1E88C7; --blue-light:#EAF4FB;
+    --aqua:#17A398; --bg:#F4F6F8; --card:#FFFFFF; --border:#E1E6EA;
+    --text:#1F2937; --text-soft:#6B7280;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:'Inter', sans-serif; display:flex; flex-direction:column; min-height:100vh; }
+  h1,h2,h3{ font-family:'Poppins', sans-serif; margin:0; }
+
+  .topbar{ background:var(--navy); color:#fff; padding:14px 24px; display:flex; align-items:center; justify-content:space-between; box-shadow:0 2px 10px rgba(11,61,98,0.15); }
+  .brand{ display:flex; align-items:center; gap:12px; }
+  .brand img{ height:32px; display:block; background:#fff; border-radius:6px; padding:4px 8px; }
+  .brand-text .title{ font-size:15.5px; font-weight:600; line-height:1.2; }
+  .brand-text .subtitle{ font-size:11.5px; color:#AFCBDD; }
+  .badge{ font-size:11px; background:rgba(255,255,255,0.12); padding:5px 10px; border-radius:20px; color:#DCEBF5; font-weight:500; }
+
+  .hero{ background:linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%); color:#fff; padding:26px 24px 34px; }
+  .hero-inner{ max-width:800px; margin:0 auto; }
+  .hero h1{ font-size:23px; font-weight:600; margin-bottom:6px; }
+  .hero p{ font-size:14px; color:#C7DCEA; max-width:540px; line-height:1.55; margin:0; }
+  .hero-tags{ display:flex; gap:8px; margin-top:16px; flex-wrap:wrap; }
+  .hero-tag{ font-size:11.5px; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.18); padding:5px 11px; border-radius:20px; color:#E4F1FA; }
+
+  .main-wrap{ flex:1; display:flex; justify-content:center; padding:0 16px; margin-top:-20px; }
+  .console{ width:100%; max-width:800px; display:flex; flex-direction:column; background:var(--card); border-radius:14px; box-shadow:0 8px 30px rgba(11,61,98,0.10); overflow:hidden; margin-bottom:24px; }
+
+  .chat-log{ flex:1; min-height:340px; max-height:58vh; overflow-y:auto; padding:22px 22px 8px; display:flex; flex-direction:column; gap:18px; }
+
+  .empty-state h2{ font-size:16.5px; margin-bottom:6px; color:var(--navy); }
+  .empty-state p{ font-size:13.5px; color:var(--text-soft); line-height:1.55; margin:0 0 14px; }
+  .chip-grid{ display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+  @media (max-width:560px){ .chip-grid{ grid-template-columns:1fr; } }
+  .chip{ font-family:'Inter', sans-serif; font-size:12.8px; border:1px solid var(--border); background:var(--blue-light); color:var(--navy); padding:10px 12px; border-radius:10px; cursor:pointer; text-align:left; font-weight:500; transition:background 0.15s ease; }
+  .chip:hover{ background:#DCEEFA; }
+
+  .cat-pills{ display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px; }
+  .cat-pill{ font-size:11px; font-weight:600; color:var(--aqua); background:#E7F7F5; padding:4px 10px; border-radius:20px; }
+
+  .msg-row{ display:flex; flex-direction:column; max-width:100%; }
+  .msg-row.user{ align-items:flex-end; }
+  .msg-row.assistant{ align-items:flex-start; }
+  .msg-label{ font-size:10.5px; font-weight:600; letter-spacing:0.02em; color:var(--text-soft); margin-bottom:5px; padding:0 3px; text-transform:uppercase; }
+
+  .bubble{ padding:12px 15px; border-radius:14px; font-size:14.5px; line-height:1.62; max-width:90%; white-space:pre-wrap; }
+  .bubble.user{ background:var(--blue); color:#fff; border-bottom-right-radius:4px; }
+  .bubble.assistant{ background:#F7F9FA; border:1px solid var(--border); border-bottom-left-radius:4px; color:var(--text); }
+  .bubble.assistant strong{ color:var(--navy); }
+  .bubble.assistant code{ font-family:monospace; background:#EEF2F4; padding:1px 4px; font-size:13px; border-radius:4px; }
+
+  .sources-box{ margin-top:8px; max-width:90%; display:flex; flex-wrap:wrap; gap:6px; }
+  .source-chip{ font-size:11.5px; color:var(--navy); background:var(--blue-light); border:1px solid #CFE6F5; padding:4px 10px; border-radius:20px; display:flex; align-items:center; gap:5px; text-decoration:none; }
+  .source-chip::before{ content:""; width:6px; height:6px; border-radius:50%; background:var(--aqua); }
+
+  .thinking-row{ display:flex; align-items:center; gap:8px; padding:2px; }
+  .thinking-dot{ width:6px;height:6px;border-radius:50%; background:var(--blue); animation:pulse 1.1s infinite ease-in-out; }
+  .thinking-dot:nth-child(2){ animation-delay:0.15s; }
+  .thinking-dot:nth-child(3){ animation-delay:0.3s; }
+  @keyframes pulse{ 0%,80%,100%{ opacity:0.25; transform:scale(0.85); } 40%{ opacity:1; transform:scale(1); } }
+  .thinking-text{ font-size:12.5px; color:var(--text-soft); }
+
+  .error-box{ border:1px solid #E3B0A6; background:#FCEEEA; color:#9A3F2E; padding:10px 12px; font-size:13px; border-radius:10px; max-width:90%; }
+
+  .input-bar{ border-top:1px solid var(--border); padding:14px 18px 16px; display:flex; gap:10px; align-items:flex-end; background:#fff; }
+  .input-bar textarea{ flex:1; resize:none; border:1px solid var(--border); background:var(--bg); border-radius:10px; padding:11px 13px; font-family:'Inter', sans-serif; font-size:14px; color:var(--text); line-height:1.4; min-height:44px; max-height:140px; }
+  .input-bar textarea:focus{ outline:none; border-color:var(--blue); background:#fff; }
+  .send-btn{ background:var(--blue); color:#fff; border:none; border-radius:10px; padding:0 20px; height:44px; font-family:'Inter', sans-serif; font-weight:600; font-size:13.5px; cursor:pointer; white-space:nowrap; }
+  .send-btn:hover{ background:#166EA0; }
+  .send-btn:disabled{ background:#B9CCD8; cursor:not-allowed; }
+
+  .footer-note{ text-align:center; font-size:11.5px; color:#8B98A1; padding:0 16px 26px; max-width:700px; margin:0 auto; }
+
+  ::-webkit-scrollbar{ width:8px; }
+  ::-webkit-scrollbar-thumb{ background:#C9D3D9; border-radius:4px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <img src="/logo.png" alt="Filsa">
+    <div class="brand-text">
+      <div class="title">Soporte Técnico Walchem</div>
+      <div class="subtitle">Filsa · Tratamiento de agua</div>
+    </div>
+  </div>
+  <div class="badge">Búsqueda en vivo · Sin login</div>
+</div>
+
+<div class="hero">
+  <div class="hero-inner">
+    <h1>¿Con qué equipo necesitás ayuda hoy?</h1>
+    <p>Consultá manuales de bombas, controladores, sensores y accesorios Walchem. Cada respuesta lee el PDF completo y original en el momento, y cita el documento exacto.</p>
+    <div class="hero-tags">
+      <span class="hero-tag">Bombas EHE · EWN · EWP · EZ · HRP · IX · LK</span>
+      <span class="hero-tag">Controladores Intuition-6 / 9 · W100</span>
+      <span class="hero-tag">Sensores y accesorios</span>
+    </div>
+  </div>
+</div>
+
+<div class="main-wrap">
+  <div class="console">
+    <div class="chat-log" id="chatLog">
+      <div class="empty-state" id="emptyState">
+        <div class="cat-pills">
+          <span class="cat-pill">BOMBAS</span>
+          <span class="cat-pill">CONTROLADORES</span>
+          <span class="cat-pill">SENSORES</span>
+          <span class="cat-pill">ACCESORIOS</span>
+        </div>
+        <h2>Preguntas frecuentes para arrancar</h2>
+        <p>Tocá una para probarla, o escribí la tuya abajo.</p>
+        <div class="chip-grid">
+          <button class="chip" data-q="¿Cuáles son los pasos de troubleshooting si la lectura del sensor de cloro no coincide con el análisis manual?">Lectura de cloro no coincide con análisis manual</button>
+          <button class="chip" data-q="¿Cómo hago la calibración de la bomba dosificadora LK paso a paso?">Calibración de la bomba LK</button>
+          <button class="chip" data-q="¿Cómo instalo el sensor de cobre por inmersión?">Instalación sensor de cobre inmersible</button>
+          <button class="chip" data-q="¿Qué diferencia hay entre el controlador Intuition-6 y el Intuition-9?">Diferencia Intuition-6 vs Intuition-9</button>
+          <button class="chip" data-q="¿Cómo cableo el preamplificador pH/ORP a un controlador Walchem?">Cableado de preamplificador pH/ORP</button>
+          <button class="chip" data-q="¿Cómo uso el protocolo Modbus con el W600/W900?">Protocolo Modbus en W600/W900</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-bar">
+      <textarea id="userInput" placeholder="Escribí tu consulta técnica…" rows="1"></textarea>
+      <button class="send-btn" id="sendBtn">Enviar</button>
+    </div>
+  </div>
+</div>
+<div class="footer-note">Cada respuesta lee en el momento el PDF completo y original desde Google Drive · Verificá siempre ante decisiones críticas de seguridad</div>
+
+<script>
+const chatLog = document.getElementById('chatLog');
+const emptyState = document.getElementById('emptyState');
+const userInput = document.getElementById('userInput');
+const sendBtn = document.getElementById('sendBtn');
+
+let history = [];
+let isLoading = false;
+
+function autoResize(){
+  userInput.style.height = 'auto';
+  userInput.style.height = Math.min(userInput.scrollHeight, 140) + 'px';
+}
+userInput.addEventListener('input', autoResize);
+userInput.addEventListener('keydown', (e) => {
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
+});
+sendBtn.addEventListener('click', sendMessage);
+document.querySelectorAll('.chip').forEach(chip => {
+  chip.addEventListener('click', () => { userInput.value = chip.getAttribute('data-q'); sendMessage(); });
+});
+
+function escapeHtml(str){ return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function renderInline(text){
+  let safe = escapeHtml(text);
+  safe = safe.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return safe;
+}
+
+function addUserMessage(text){
+  emptyState.style.display = 'none';
+  const row = document.createElement('div');
+  row.className = 'msg-row user';
+  row.innerHTML = `<div class="msg-label">Vos</div><div class="bubble user">${escapeHtml(text)}</div>`;
+  chatLog.appendChild(row);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function addThinkingIndicator(){
+  const row = document.createElement('div');
+  row.className = 'msg-row assistant';
+  row.id = 'thinkingRow';
+  row.innerHTML = `
+    <div class="msg-label">Soporte técnico</div>
+    <div class="thinking-row">
+      <div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div>
+      <span class="thinking-text">Leyendo los manuales completos en Drive…</span>
+    </div>`;
+  chatLog.appendChild(row);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+function removeThinkingIndicator(){ const row = document.getElementById('thinkingRow'); if(row) row.remove(); }
+
+function addAssistantMessage(text, sources){
+  const row = document.createElement('div');
+  row.className = 'msg-row assistant';
+  const label = document.createElement('div');
+  label.className = 'msg-label';
+  label.textContent = 'Soporte técnico';
+  row.appendChild(label);
+
+  const bubble = document.createElement('div');
+  bubble.className = 'bubble assistant';
+  bubble.innerHTML = renderInline(text).replace(/\n/g, '<br>');
+  row.appendChild(bubble);
+
+  if(sources && sources.length){
+    const box = document.createElement('div');
+    box.className = 'sources-box';
+    box.innerHTML = sources.map(s => `<a class="source-chip" href="${s.url}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`).join('');
+    row.appendChild(box);
+  }
+  chatLog.appendChild(row);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function addErrorMessage(text){
+  const row = document.createElement('div');
+  row.className = 'msg-row assistant';
+  row.innerHTML = `<div class="msg-label">Soporte técnico</div><div class="error-box">${escapeHtml(text)}</div>`;
+  chatLog.appendChild(row);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function sendMessage(){
+  const text = userInput.value.trim();
+  if(!text || isLoading) return;
+
+  addUserMessage(text);
+  userInput.value = '';
+  autoResize();
+
+  isLoading = true;
+  sendBtn.disabled = true;
+  addThinkingIndicator();
+
+  try{
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, history })
+    });
+
+    if(!response.ok){
+      const errBody = await response.json().catch(() => ({}));
+      throw new Error(errBody.error || ('HTTP ' + response.status));
+    }
+
+    const data = await response.json();
+    removeThinkingIndicator();
+
+    addAssistantMessage(data.reply, data.sources);
+    history.push({ role: 'user', content: text });
+    history.push({ role: 'assistant', content: data.reply });
+
+  }catch(err){
+    removeThinkingIndicator();
+    addErrorMessage('No se pudo completar la consulta (' + err.message + '). Probá de nuevo en unos segundos.');
+    console.error(err);
+  }finally{
+    isLoading = false;
+    sendBtn.disabled = false;
+  }
+}
+</script>
+
+</body>
+</html>
