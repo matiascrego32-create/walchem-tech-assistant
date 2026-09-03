@@ -9,7 +9,6 @@
   "dependencies": {
     "express": "^4.19.2",
     "googleapis": "^140.0.1",
-    "pdf-parse": "^1.1.1",
     "@anthropic-ai/sdk": "^0.27.3",
     "dotenv": "^16.4.5",
     "cors": "^2.8.5"
