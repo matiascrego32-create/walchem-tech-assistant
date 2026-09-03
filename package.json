@@ -10,6 +10,8 @@
     "express": "^4.19.2",
     "googleapis": "^140.0.1",
     "@google/genai": "latest",
+    "pdfjs-dist": "3.11.174",
+    "canvas": "^2.11.2",
     "dotenv": "^16.4.5",
     "cors": "^2.8.5"
   },
