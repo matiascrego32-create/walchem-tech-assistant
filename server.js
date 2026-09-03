@@ -13,16 +13,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// ---- Configuracion ----
-// ID de la carpeta raiz "Walchem" en Drive. El service account solo puede
-// ver lo que esta compartido con el, asi que si SOLO le compartis esta
-// carpeta, las busquedas quedan automaticamente acotadas a su contenido.
 const WALCHEM_ROOT_FOLDER_ID = process.env.WALCHEM_ROOT_FOLDER_ID || '';
-
-// Maximo de caracteres de texto por documento que se envian a Claude.
-// El texto se extrae COMPLETO del PDF; este numero es solo un techo de
-// seguridad para preguntas que matchean documentos gigantes. Subilo si
-// tu plan de Anthropic soporta contextos mas grandes.
 const MAX_CHARS_PER_DOC = parseInt(process.env.MAX_CHARS_PER_DOC || '150000', 10);
 const MAX_DOCS_PER_QUERY = parseInt(process.env.MAX_DOCS_PER_QUERY || '3', 10);
 
@@ -36,7 +27,6 @@ const STOPWORDS = new Set([
 function extractKeywords(text) {
   const words = (text.toLowerCase().match(/[a-záéíóúñ0-9-]+/g) || [])
     .filter(w => w.length > 2 && !STOPWORDS.has(w));
-  // dedupe preservando orden, max 8 terminos para no romper el limite de query de Drive
   const seen = new Set();
   const out = [];
   for (const w of words) {
@@ -63,24 +53,31 @@ function getDriveClient() {
 
 async function searchDrivePdfs(drive, keywords) {
   if (keywords.length === 0) return [];
-  const clauses = keywords
-    .map(k => escapeForDriveQuery(k))
-    .map(k => `title contains '${k}' or fullText contains '${k}'`)
-    .join(' or ');
-  let q = `(${clauses}) and mimeType = 'application/pdf' and trashed = false`;
-  if (WALCHEM_ROOT_FOLDER_ID) {
-    // Nota: Drive API no soporta "recursivo bajo esta carpeta" nativamente.
-    // Como el service account solo ve lo compartido con el (la carpeta Walchem
-    // y todo lo que cuelga de ella), la busqueda queda acotada de por si.
-    // Si en el futuro el service account tiene acceso a mas cosas, restringir
-    // aca por parents requeriria resolver el arbol completo de subcarpetas.
+  const resultsMap = new Map();
+  const topKeywords = keywords.slice(0, 5);
+
+  for (const kwRaw of topKeywords) {
+    const kw = escapeForDriveQuery(kwRaw);
+    const queries = [
+      `mimeType = 'application/pdf' and trashed = false and name contains '${kw}'`,
+      `mimeType = 'application/pdf' and trashed = false and fullText contains '${kw}'`
+    ];
+    for (const q of queries) {
+      try {
+        const res = await drive.files.list({
+          q,
+          pageSize: 8,
+          fields: 'files(id,name,webViewLink,size)'
+        });
+        for (const f of (res.data.files || [])) {
+          if (!resultsMap.has(f.id)) resultsMap.set(f.id, f);
+        }
+      } catch (e) {
+        console.error(`Error buscando "${kwRaw}":`, e.message);
+      }
+    }
   }
-  const res = await drive.files.list({
-    q,
-    pageSize: 10,
-    fields: 'files(id, name, webViewLink, size)',
-  });
-  return res.data.files || [];
+  return Array.from(resultsMap.values());
 }
 
 async function downloadPdfText(drive, fileId) {
@@ -94,8 +91,6 @@ async function downloadPdfText(drive, fileId) {
 }
 
 function rankFiles(files, keywords) {
-  // Prioriza titulos que contienen "manual" cuando la pregunta suena a
-  // procedimiento, y cuenta cuantos keywords aparecen en el titulo.
   return files
     .map(f => {
       const titleLower = f.name.toLowerCase();
@@ -127,7 +122,6 @@ app.post('/api/chat', async (req, res) => {
       console.error('Error buscando en Drive:', e.message);
     }
 
-    // dedupe por nombre y quedarse con los mejores N
     const seenNames = new Set();
     candidates = candidates.filter(f => {
       if (seenNames.has(f.name)) return false;
