@@ -79,15 +79,13 @@ async function searchDrivePdfs(drive, keywords) {
     q,
     pageSize: 10,
     fields: 'files(id, name, webViewLink, size)',
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true
   });
   return res.data.files || [];
 }
 
 async function downloadPdfText(drive, fileId) {
   const res = await drive.files.get(
-    { fileId, alt: 'media', supportsAllDrives: true },
+    { fileId, alt: 'media' },
     { responseType: 'arraybuffer' }
   );
   const buffer = Buffer.from(res.data);
