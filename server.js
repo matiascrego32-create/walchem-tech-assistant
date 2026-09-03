@@ -4,6 +4,8 @@ const path = require('path');
 const cors = require('cors');
 const { google } = require('googleapis');
 const { GoogleGenAI } = require('@google/genai');
+const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+const { createCanvas } = require('canvas');
 
 const app = express();
 app.use(cors());
@@ -14,7 +16,8 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemma-4-26b-a4b-it';
 
 const WALCHEM_ROOT_FOLDER_ID = process.env.WALCHEM_ROOT_FOLDER_ID || '';
-const MAX_DOCS_PER_QUERY = parseInt(process.env.MAX_DOCS_PER_QUERY || '2', 10);
+const MAX_DOCS_PER_QUERY = parseInt(process.env.MAX_DOCS_PER_QUERY || '1', 10);
+const MAX_PAGES_PER_DOC = parseInt(process.env.MAX_PAGES_PER_DOC || '12', 10);
 const MAX_PDF_BYTES = 30 * 1024 * 1024;
 
 const STOPWORDS = new Set([
@@ -86,6 +89,22 @@ async function downloadPdfBuffer(drive, fileId) {
     { responseType: 'arraybuffer' }
   );
   return Buffer.from(res.data);
+}
+
+async function pdfBufferToPageImages(buffer, maxPages) {
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+  const pdf = await loadingTask.promise;
+  const numPages = Math.min(pdf.numPages, maxPages);
+  const images = [];
+  for (let i = 1; i <= numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 1.6 });
+    const canvas = createCanvas(viewport.width, viewport.height);
+    const context = canvas.getContext('2d');
+    await page.render({ canvasContext: context, viewport }).promise;
+    images.push(canvas.toBuffer('image/png').toString('base64'));
+  }
+  return { images, totalPages: pdf.numPages, pagesUsed: numPages };
 }
 
 function rankFiles(files, keywords) {
@@ -192,18 +211,21 @@ app.post('/api/chat', async (req, res) => {
           continue;
         }
         const buffer = await downloadPdfBuffer(drive, file.id);
-        documentParts.push({
-          inlineData: {
-            mimeType: 'application/pdf',
-            data: buffer.toString('base64')
-          }
-        });
+        const { images, totalPages, pagesUsed } = await pdfBufferToPageImages(buffer, MAX_PAGES_PER_DOC);
+        for (const imgBase64 of images) {
+          documentParts.push({
+            inlineData: {
+              mimeType: 'image/png',
+              data: imgBase64
+            }
+          });
+        }
         sources.push({
-          title: file.name,
+          title: file.name + (totalPages > pagesUsed ? ` (primeras ${pagesUsed} de ${totalPages} paginas)` : ''),
           url: file.webViewLink || `https://drive.google.com/file/d/${file.id}/view`
         });
       } catch (e) {
-        console.error('Error leyendo archivo', file.name, e.message);
+        console.error('Error leyendo/convirtiendo archivo', file.name, e.message);
       }
     }
 
