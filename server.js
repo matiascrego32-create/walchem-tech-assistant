@@ -11,7 +11,7 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemma-4-26b-a4b-it';
 
 const WALCHEM_ROOT_FOLDER_ID = process.env.WALCHEM_ROOT_FOLDER_ID || '';
 const MAX_DOCS_PER_QUERY = parseInt(process.env.MAX_DOCS_PER_QUERY || '2', 10);
@@ -110,6 +110,52 @@ function historyToGeminiContents(history) {
   }));
 }
 
+async function searchWeb(query) {
+  const apiKey = process.env.TAVILY_API_KEY;
+  if (!apiKey) return null;
+  try {
+    const res = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query,
+        max_results: 3,
+        search_depth: 'basic'
+      })
+    });
+    if (!res.ok) {
+      console.error('Tavily respondio con error HTTP', res.status);
+      return null;
+    }
+    const data = await res.json();
+    return data.results || [];
+  } catch (e) {
+    console.error('Error en busqueda web:', e.message);
+    return null;
+  }
+}
+
+async function generateWithRetry(params, maxRetries = 3) {
+  let lastError;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (e) {
+      lastError = e;
+      const isOverloaded = e.message && (e.message.includes('"code":503') || e.message.includes('UNAVAILABLE'));
+      if (isOverloaded && attempt < maxRetries - 1) {
+        const waitMs = 1500 * (attempt + 1);
+        console.warn(`Modelo saturado (503), reintentando en ${waitMs}ms (intento ${attempt + 1}/${maxRetries})`);
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastError;
+}
+
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, history = [] } = req.body;
@@ -161,15 +207,25 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
+    let webResultsBlock = '';
+    if (documentParts.length === 0) {
+      const webResults = await searchWeb(`Walchem ${message}`);
+      if (webResults && webResults.length > 0) {
+        webResultsBlock = '\n\nRESULTADOS DE BUSQUEDA WEB:\n' + webResults
+          .map(r => `- ${r.title}: ${r.content} (${r.url})`)
+          .join('\n');
+      }
+    }
+
     const systemPrompt = `Sos el asistente tecnico interno de Filsa, para el equipo que da soporte a equipos Walchem (bombas dosificadoras, controladores, sensores y accesorios de tratamiento de agua).
 
 Tenes dos fuentes de informacion disponibles:
 1. Los documentos PDF originales adjuntos a este mensaje (si hay alguno) - son los manuales reales de Walchem, con su texto, tablas, diagramas y esquemas completos. Esta es tu fuente PRINCIPAL y mas confiable para specs, procedimientos y troubleshooting.
-2. Busqueda web (Google Search), disponible como herramienta - usala para complementar cuando haga falta informacion que no este en los documentos adjuntos.
+2. Resultados de busqueda web (si se incluyen mas abajo) - usalos para complementar cuando no haya documentos adjuntos relevantes.
 
 Respondé de forma directa y natural, combinando ambas fuentes segun corresponda, sin aclarar de cual proviene cada dato. Si genuinamente no encontras informacion confiable en ningun lado, decilo con honestidad en vez de inventar valores tecnicos, rangos o procedimientos de seguridad.
 
-Se conciso, directo y accionable, como si hablaras con un tecnico que necesita resolver algo ahora. Usa listas numeradas para procedimientos paso a paso. Respondé siempre en español.`;
+Se conciso, directo y accionable, como si hablaras con un tecnico que necesita resolver algo ahora. Usa listas numeradas para procedimientos paso a paso. Respondé siempre en español.${webResultsBlock}`;
 
     const currentTurnParts = [
       ...documentParts,
@@ -181,13 +237,10 @@ Se conciso, directo y accionable, como si hablaras con un tecnico que necesita r
       { role: 'user', parts: currentTurnParts }
     ];
 
-    const response = await ai.models.generateContent({
+    const response = await generateWithRetry({
       model: GEMINI_MODEL,
       contents,
-      config: {
-        systemInstruction: systemPrompt,
-        tools: [{ googleSearch: {} }]
-      }
+      config: { systemInstruction: systemPrompt }
     });
 
     const replyText = response.text || 'No pude generar una respuesta.';
