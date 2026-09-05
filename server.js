@@ -14,8 +14,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemma-4-26b-a4b-it';
+const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemma-4-12b-it';
 
-const WALCHEM_ROOT_FOLDER_ID = process.env.WALCHEM_ROOT_FOLDER_ID || '';
+// Carpeta padre que contiene una subcarpeta por marca (ej. "Catalogos Tecnicos").
+// Si no esta configurada, la app funciona igual pero sin selector de marca.
+const ROOT_FOLDER_ID = process.env.ROOT_FOLDER_ID || '';
+const BRAND_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutos
+
 const MAX_DOCS_PER_QUERY = parseInt(process.env.MAX_DOCS_PER_QUERY || '1', 10);
 const MAX_PAGES_PER_DOC = parseInt(process.env.MAX_PAGES_PER_DOC || '12', 10);
 const MAX_PDF_BYTES = 30 * 1024 * 1024;
@@ -122,6 +127,63 @@ function rankFiles(files, keywords) {
     .map(x => x.file);
 }
 
+// --- Soporte de multiples marcas ---
+async function listBrandFolders(drive) {
+  if (!ROOT_FOLDER_ID) return [];
+  try {
+    const res = await drive.files.list({
+      q: `'${ROOT_FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      pageSize: 50,
+      fields: 'files(id,name)'
+    });
+    return (res.data.files || []).sort((a, b) => a.name.localeCompare(b.name));
+  } catch (e) {
+    console.error('Error listando marcas:', e.message);
+    return [];
+  }
+}
+
+const brandFileCache = new Map();
+
+async function listPdfsUnderFolder(drive, rootFolderId) {
+  const cached = brandFileCache.get(rootFolderId);
+  if (cached && cached.expiresAt > Date.now()) return cached.files;
+
+  const allFiles = [];
+  let frontier = [rootFolderId];
+  let depth = 0;
+  const visitedFolders = new Set();
+
+  while (frontier.length > 0 && depth < 8 && allFiles.length < 500) {
+    const nextFrontier = [];
+    for (const folderId of frontier) {
+      if (visitedFolders.has(folderId)) continue;
+      visitedFolders.add(folderId);
+      try {
+        const res = await drive.files.list({
+          q: `'${folderId}' in parents and trashed = false`,
+          pageSize: 100,
+          fields: 'files(id,name,mimeType,webViewLink,size)'
+        });
+        for (const f of (res.data.files || [])) {
+          if (f.mimeType === 'application/vnd.google-apps.folder') {
+            nextFrontier.push(f.id);
+          } else if (f.mimeType === 'application/pdf') {
+            allFiles.push(f);
+          }
+        }
+      } catch (e) {
+        console.error(`Error listando carpeta ${folderId}:`, e.message);
+      }
+    }
+    frontier = nextFrontier;
+    depth++;
+  }
+
+  brandFileCache.set(rootFolderId, { files: allFiles, expiresAt: Date.now() + BRAND_CACHE_TTL_MS });
+  return allFiles;
+}
+
 function historyToGeminiContents(history) {
   return history.map(turn => ({
     role: turn.role === 'assistant' ? 'model' : 'user',
@@ -155,29 +217,46 @@ async function searchWeb(query) {
   }
 }
 
-async function generateWithRetry(params, maxRetries = 3) {
+async function generateWithRetry(baseParams, models, maxRetriesPerModel = 4) {
   let lastError;
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await ai.models.generateContent(params);
-    } catch (e) {
-      lastError = e;
-      const isOverloaded = e.message && (e.message.includes('"code":503') || e.message.includes('UNAVAILABLE'));
-      if (isOverloaded && attempt < maxRetries - 1) {
-        const waitMs = 1500 * (attempt + 1);
-        console.warn(`Modelo saturado (503), reintentando en ${waitMs}ms (intento ${attempt + 1}/${maxRetries})`);
-        await new Promise(r => setTimeout(r, waitMs));
-        continue;
+  for (const model of models) {
+    for (let attempt = 0; attempt < maxRetriesPerModel; attempt++) {
+      try {
+        return await ai.models.generateContent({ ...baseParams, model });
+      } catch (e) {
+        lastError = e;
+        const isOverloaded = e.message && (e.message.includes('"code":503') || e.message.includes('UNAVAILABLE'));
+        if (isOverloaded && attempt < maxRetriesPerModel - 1) {
+          const waitMs = 2000 * (attempt + 1);
+          console.warn(`${model} saturado (503), reintentando en ${waitMs}ms (intento ${attempt + 1}/${maxRetriesPerModel})`);
+          await new Promise(r => setTimeout(r, waitMs));
+          continue;
+        }
+        if (isOverloaded) {
+          console.warn(`${model} sigue saturado despues de ${maxRetriesPerModel} intentos, probando siguiente modelo si hay`);
+          break;
+        }
+        throw e;
       }
-      throw e;
     }
   }
   throw lastError;
 }
 
+app.get('/api/brands', async (req, res) => {
+  try {
+    const drive = getDriveClient();
+    const brands = await listBrandFolders(drive);
+    res.json({ brands });
+  } catch (e) {
+    console.error('Error en /api/brands:', e.message);
+    res.json({ brands: [] });
+  }
+});
+
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, history = [] } = req.body;
+    const { message, history = [], brandFolderId } = req.body;
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Falta el campo "message"' });
     }
@@ -186,10 +265,19 @@ app.post('/api/chat', async (req, res) => {
     const keywords = extractKeywords(message);
 
     let candidates = [];
-    try {
-      candidates = await searchDrivePdfs(drive, keywords);
-    } catch (e) {
-      console.error('Error buscando en Drive:', e.message);
+    if (brandFolderId) {
+      try {
+        const brandFiles = await listPdfsUnderFolder(drive, brandFolderId);
+        candidates = rankFiles(brandFiles, keywords).slice(0, 20);
+      } catch (e) {
+        console.error('Error buscando en la marca seleccionada:', e.message);
+      }
+    } else {
+      try {
+        candidates = await searchDrivePdfs(drive, keywords);
+      } catch (e) {
+        console.error('Error buscando en Drive:', e.message);
+      }
     }
 
     const seenNames = new Set();
@@ -231,7 +319,7 @@ app.post('/api/chat', async (req, res) => {
 
     let webResultsBlock = '';
     if (documentParts.length === 0) {
-      const webResults = await searchWeb(`Walchem ${message}`);
+      const webResults = await searchWeb(message);
       if (webResults && webResults.length > 0) {
         webResultsBlock = '\n\nRESULTADOS DE BUSQUEDA WEB:\n' + webResults
           .map(r => `- ${r.title}: ${r.content} (${r.url})`)
@@ -239,13 +327,13 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    const systemPrompt = `Sos el asistente tecnico interno de Filsa, para el equipo que da soporte a equipos Walchem (bombas dosificadoras, controladores, sensores y accesorios de tratamiento de agua).
+    const systemPrompt = `Sos el asistente tecnico interno de Filsa, empresa de tratamiento de agua. Das soporte al equipo tecnico sobre los distintos equipos y marcas que Filsa distribuye (bombas dosificadoras, controladores, sensores y accesorios de varios fabricantes).
 
 Tenes dos fuentes de informacion disponibles:
-1. Los documentos PDF originales adjuntos a este mensaje (si hay alguno) - son los manuales reales de Walchem, con su texto, tablas, diagramas y esquemas completos. Esta es tu fuente PRINCIPAL y mas confiable para specs, procedimientos y troubleshooting.
+1. Los documentos PDF originales adjuntos a este mensaje (si hay alguno) - son los manuales reales de la marca/equipo correspondiente, con su texto, tablas, diagramas y esquemas completos. Esta es tu fuente PRINCIPAL y mas confiable para specs, procedimientos y troubleshooting.
 2. Resultados de busqueda web (si se incluyen mas abajo) - usalos para complementar cuando no haya documentos adjuntos relevantes.
 
-Respondé de forma directa y natural, combinando ambas fuentes segun corresponda, sin aclarar de cual proviene cada dato. Si genuinamente no encontras informacion confiable en ningun lado, decilo con honestidad en vez de inventar valores tecnicos, rangos o procedimientos de seguridad.
+Respondé de forma directa y natural, combinando ambas fuentes segun corresponda, sin aclarar de cual proviene cada dato. Si el usuario no aclara la marca del equipo y hay ambiguedad entre varias marcas con productos similares, pedile que aclare el modelo o la marca antes de responder con datos tecnicos especificos. Si genuinamente no encontras informacion confiable en ningun lado, decilo con honestidad en vez de inventar valores tecnicos, rangos o procedimientos de seguridad.
 
 Se conciso, directo y accionable, como si hablaras con un tecnico que necesita resolver algo ahora. Usa listas numeradas para procedimientos paso a paso. Respondé siempre en español.${webResultsBlock}`;
 
@@ -259,11 +347,10 @@ Se conciso, directo y accionable, como si hablaras con un tecnico que necesita r
       { role: 'user', parts: currentTurnParts }
     ];
 
-    const response = await generateWithRetry({
-      model: GEMINI_MODEL,
-      contents,
-      config: { systemInstruction: systemPrompt }
-    });
+    const response = await generateWithRetry(
+      { contents, config: { systemInstruction: systemPrompt } },
+      [GEMINI_MODEL, GEMINI_FALLBACK_MODEL]
+    );
 
     const replyText = response.text || 'No pude generar una respuesta.';
 
@@ -278,5 +365,5 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Walchem Tech Assistant (Gemini) escuchando en puerto ${PORT}`);
+  console.log(`Soporte Tecnico Filsa (Gemini) escuchando en puerto ${PORT}`);
 });
