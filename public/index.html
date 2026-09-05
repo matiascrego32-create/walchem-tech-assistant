@@ -99,18 +99,13 @@
       <div class="subtitle">Filsa · Tratamiento de agua</div>
     </div>
   </div>
-  <div class="badge">Búsqueda en vivo · Sin login</div>
+  <div class="badge">Búsqueda en vivo</div>
 </div>
 
 <div class="hero">
   <div class="hero-inner">
     <h1>¿Con qué equipo necesitás ayuda hoy?</h1>
-    <p>Consultá manuales de bombas, controladores, sensores y accesorios de las marcas que distribuye Filsa. Cada respuesta lee el PDF completo y original en el momento, y cita el documento exacto.</p>
-    <div class="hero-tags">
-      <span class="hero-tag">Bombas dosificadoras</span>
-      <span class="hero-tag">Controladores</span>
-      <span class="hero-tag">Sensores y accesorios</span>
-    </div>
+    <p>Consultá manuales de bombas, controladores, sensores y accesorios de las marcas que distribuye Filsa.</p>
     <div class="brand-selector" id="brandSelector" style="display:none;">
       <div class="brand-selector-label">Marca:</div>
       <div class="brand-pills" id="brandPills"></div>
@@ -121,24 +116,7 @@
 <div class="main-wrap">
   <div class="console">
     <div class="chat-log" id="chatLog">
-      <div class="empty-state" id="emptyState">
-        <div class="cat-pills">
-          <span class="cat-pill">BOMBAS</span>
-          <span class="cat-pill">CONTROLADORES</span>
-          <span class="cat-pill">SENSORES</span>
-          <span class="cat-pill">ACCESORIOS</span>
-        </div>
-        <h2>Preguntas frecuentes para arrancar</h2>
-        <p>Tocá una para probarla, o escribí la tuya abajo.</p>
-        <div class="chip-grid">
-          <button class="chip" data-q="¿Cuáles son los pasos de troubleshooting si la lectura del sensor de cloro no coincide con el análisis manual?">Lectura de cloro no coincide con análisis manual</button>
-          <button class="chip" data-q="¿Cómo hago la calibración de una bomba dosificadora paso a paso?">Calibración de una bomba dosificadora</button>
-          <button class="chip" data-q="¿Cómo instalo un sensor de cobre por inmersión?">Instalación de sensor de cobre inmersible</button>
-          <button class="chip" data-q="¿Qué diferencia hay entre estos dos modelos de controlador?">Comparar dos modelos de controlador</button>
-          <button class="chip" data-q="¿Cómo cableo un preamplificador de pH/ORP?">Cableado de preamplificador pH/ORP</button>
-          <button class="chip" data-q="¿Cómo configuro la salida Modbus de un controlador?">Configurar salida Modbus</button>
-        </div>
-      </div>
+      <div class="empty-state" id="emptyState"></div>
     </div>
 
     <div class="input-bar">
@@ -147,7 +125,6 @@
     </div>
   </div>
 </div>
-<div class="footer-note">Cada respuesta lee en el momento el PDF completo y original desde Google Drive · Verificá siempre ante decisiones críticas de seguridad</div>
 
 <script>
 const chatLog = document.getElementById('chatLog');
@@ -208,9 +185,6 @@ userInput.addEventListener('keydown', (e) => {
   if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
 });
 sendBtn.addEventListener('click', sendMessage);
-document.querySelectorAll('.chip').forEach(chip => {
-  chip.addEventListener('click', () => { userInput.value = chip.getAttribute('data-q'); sendMessage(); });
-});
 
 function escapeHtml(str){ return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 function renderInline(text){
