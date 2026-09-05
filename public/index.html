@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Soporte Técnico Walchem | Filsa</title>
+<title>Soporte Técnico | Filsa</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -29,6 +29,13 @@
   .hero p{ font-size:14.5px; color:#E3F3FA; max-width:540px; line-height:1.6; margin:0; }
   .hero-tags{ display:flex; gap:8px; margin-top:16px; flex-wrap:wrap; }
   .hero-tag{ font-size:11.5px; background:rgba(255,255,255,0.16); border:1px solid rgba(255,255,255,0.24); padding:5px 12px; border-radius:20px; color:#fff; font-weight:500; }
+
+  .brand-selector{ margin-top:18px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .brand-selector-label{ font-size:12.5px; color:#E3F3FA; font-weight:600; }
+  .brand-pills{ display:flex; gap:8px; flex-wrap:wrap; }
+  .brand-pill{ font-size:12.5px; font-weight:600; background:rgba(255,255,255,0.14); border:1px solid rgba(255,255,255,0.28); color:#fff; padding:6px 14px; border-radius:20px; cursor:pointer; transition:background 0.15s ease; }
+  .brand-pill:hover{ background:rgba(255,255,255,0.24); }
+  .brand-pill.active{ background:#fff; color:var(--navy); border-color:#fff; }
 
   .main-wrap{ flex:1; display:flex; justify-content:center; padding:0 16px; margin-top:-28px; }
   .console{ width:100%; max-width:800px; display:flex; flex-direction:column; background:var(--card); border-radius:24px; box-shadow:0 12px 34px rgba(11,61,98,0.14); overflow:hidden; margin-bottom:24px; }
@@ -88,7 +95,7 @@
   <div class="brand">
     <img src="/logo.png" alt="Filsa">
     <div class="brand-text">
-      <div class="title">Soporte Técnico Walchem</div>
+      <div class="title">Soporte Técnico Filsa</div>
       <div class="subtitle">Filsa · Tratamiento de agua</div>
     </div>
   </div>
@@ -98,11 +105,15 @@
 <div class="hero">
   <div class="hero-inner">
     <h1>¿Con qué equipo necesitás ayuda hoy?</h1>
-    <p>Consultá manuales de bombas, controladores, sensores y accesorios Walchem. Cada respuesta lee el PDF completo y original en el momento, y cita el documento exacto.</p>
+    <p>Consultá manuales de bombas, controladores, sensores y accesorios de las marcas que distribuye Filsa. Cada respuesta lee el PDF completo y original en el momento, y cita el documento exacto.</p>
     <div class="hero-tags">
-      <span class="hero-tag">Bombas EHE · EWN · EWP · EZ · HRP · IX · LK</span>
-      <span class="hero-tag">Controladores Intuition-6 / 9 · W100</span>
+      <span class="hero-tag">Bombas dosificadoras</span>
+      <span class="hero-tag">Controladores</span>
       <span class="hero-tag">Sensores y accesorios</span>
+    </div>
+    <div class="brand-selector" id="brandSelector" style="display:none;">
+      <div class="brand-selector-label">Marca:</div>
+      <div class="brand-pills" id="brandPills"></div>
     </div>
   </div>
 </div>
@@ -121,11 +132,11 @@
         <p>Tocá una para probarla, o escribí la tuya abajo.</p>
         <div class="chip-grid">
           <button class="chip" data-q="¿Cuáles son los pasos de troubleshooting si la lectura del sensor de cloro no coincide con el análisis manual?">Lectura de cloro no coincide con análisis manual</button>
-          <button class="chip" data-q="¿Cómo hago la calibración de la bomba dosificadora LK paso a paso?">Calibración de la bomba LK</button>
-          <button class="chip" data-q="¿Cómo instalo el sensor de cobre por inmersión?">Instalación sensor de cobre inmersible</button>
-          <button class="chip" data-q="¿Qué diferencia hay entre el controlador Intuition-6 y el Intuition-9?">Diferencia Intuition-6 vs Intuition-9</button>
-          <button class="chip" data-q="¿Cómo cableo el preamplificador pH/ORP a un controlador Walchem?">Cableado de preamplificador pH/ORP</button>
-          <button class="chip" data-q="¿Cómo uso el protocolo Modbus con el W600/W900?">Protocolo Modbus en W600/W900</button>
+          <button class="chip" data-q="¿Cómo hago la calibración de una bomba dosificadora paso a paso?">Calibración de una bomba dosificadora</button>
+          <button class="chip" data-q="¿Cómo instalo un sensor de cobre por inmersión?">Instalación de sensor de cobre inmersible</button>
+          <button class="chip" data-q="¿Qué diferencia hay entre estos dos modelos de controlador?">Comparar dos modelos de controlador</button>
+          <button class="chip" data-q="¿Cómo cableo un preamplificador de pH/ORP?">Cableado de preamplificador pH/ORP</button>
+          <button class="chip" data-q="¿Cómo configuro la salida Modbus de un controlador?">Configurar salida Modbus</button>
         </div>
       </div>
     </div>
@@ -146,6 +157,47 @@ const sendBtn = document.getElementById('sendBtn');
 
 let history = [];
 let isLoading = false;
+let selectedBrandId = null;
+let selectedBrandName = null;
+
+async function loadBrands(){
+  try{
+    const res = await fetch('/api/brands');
+    if(!res.ok) return;
+    const data = await res.json();
+    const brands = data.brands || [];
+    if(brands.length === 0) return; // sin carpeta padre configurada, no mostramos selector
+
+    const brandSelector = document.getElementById('brandSelector');
+    const brandPills = document.getElementById('brandPills');
+    brandSelector.style.display = 'flex';
+
+    const allPill = document.createElement('button');
+    allPill.className = 'brand-pill active';
+    allPill.textContent = 'Todas las marcas';
+    allPill.addEventListener('click', () => selectBrand(null, null, allPill));
+    brandPills.appendChild(allPill);
+
+    brands.forEach(b => {
+      const pill = document.createElement('button');
+      pill.className = 'brand-pill';
+      pill.textContent = b.name;
+      pill.addEventListener('click', () => selectBrand(b.id, b.name, pill));
+      brandPills.appendChild(pill);
+    });
+  }catch(e){
+    console.error('No se pudieron cargar las marcas', e);
+  }
+}
+
+function selectBrand(id, name, clickedPill){
+  selectedBrandId = id;
+  selectedBrandName = name;
+  document.querySelectorAll('.brand-pill').forEach(p => p.classList.remove('active'));
+  clickedPill.classList.add('active');
+}
+
+loadBrands();
 
 function autoResize(){
   userInput.style.height = 'auto';
@@ -181,11 +233,12 @@ function addThinkingIndicator(){
   const row = document.createElement('div');
   row.className = 'msg-row assistant';
   row.id = 'thinkingRow';
+  const label = selectedBrandName ? `Leyendo manuales de ${selectedBrandName}…` : 'Leyendo los manuales completos en Drive…';
   row.innerHTML = `
     <div class="msg-label">Soporte técnico</div>
     <div class="thinking-row">
       <div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div>
-      <span class="thinking-text">Leyendo los manuales completos en Drive…</span>
+      <span class="thinking-text">${label}</span>
     </div>`;
   chatLog.appendChild(row);
   chatLog.scrollTop = chatLog.scrollHeight;
@@ -239,7 +292,7 @@ async function sendMessage(){
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, history })
+      body: JSON.stringify({ message: text, history, brandFolderId: selectedBrandId })
     });
 
     if(!response.ok){
