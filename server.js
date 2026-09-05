@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
@@ -6,32 +7,34 @@ const { google } = require('googleapis');
 const { GoogleGenAI } = require('@google/genai');
 const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
 const { createCanvas } = require('canvas');
-
+ 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-
+ 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemma-4-26b-a4b-it';
 const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemma-4-12b-it';
-
+ 
 // Carpeta padre que contiene una subcarpeta por marca (ej. "Catalogos Tecnicos").
 // Si no esta configurada, la app funciona igual pero sin selector de marca.
 const ROOT_FOLDER_ID = process.env.ROOT_FOLDER_ID || '';
 const BRAND_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutos
-
+ 
 const MAX_DOCS_PER_QUERY = parseInt(process.env.MAX_DOCS_PER_QUERY || '1', 10);
-const MAX_PAGES_PER_DOC = parseInt(process.env.MAX_PAGES_PER_DOC || '12', 10);
-const MAX_PDF_BYTES = 30 * 1024 * 1024;
-
+const MAX_PAGES_PER_DOC = parseInt(process.env.MAX_PAGES_PER_DOC || '6', 10);
+// Limite practico por documento para evitar requests demasiado pesados
+// (bajado para no quedarse sin memoria en el plan free de Render, 512MB).
+const MAX_PDF_BYTES = 15 * 1024 * 1024;
+ 
 const STOPWORDS = new Set([
   'de','la','el','en','y','a','los','las','un','una','que','con','para','por','se','es','del','al',
   'como','su','sus','o','este','esta','estos','estas','manual','sensor','sensores','bomba','bombas',
   'walchem','instrucciones','cual','cuales','donde','cuando','porque','pero','mas','muy','desde','hasta',
   'the','and','for','with','how','what','pump','manual','sensor'
 ]);
-
+ 
 function extractKeywords(text) {
   const words = (text.toLowerCase().match(/[a-záéíóúñ0-9-]+/g) || [])
     .filter(w => w.length > 2 && !STOPWORDS.has(w));
@@ -43,11 +46,11 @@ function extractKeywords(text) {
   }
   return out;
 }
-
+ 
 function escapeForDriveQuery(str) {
   return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
-
+ 
 function getDriveClient() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error('Falta GOOGLE_SERVICE_ACCOUNT_JSON en las variables de entorno');
@@ -58,12 +61,12 @@ function getDriveClient() {
   });
   return google.drive({ version: 'v3', auth });
 }
-
+ 
 async function searchDrivePdfs(drive, keywords) {
   if (keywords.length === 0) return [];
   const resultsMap = new Map();
   const topKeywords = keywords.slice(0, 5);
-
+ 
   for (const kwRaw of topKeywords) {
     const kw = escapeForDriveQuery(kwRaw);
     const queries = [
@@ -87,7 +90,7 @@ async function searchDrivePdfs(drive, keywords) {
   }
   return Array.from(resultsMap.values());
 }
-
+ 
 async function downloadPdfBuffer(drive, fileId) {
   const res = await drive.files.get(
     { fileId, alt: 'media' },
@@ -95,7 +98,9 @@ async function downloadPdfBuffer(drive, fileId) {
   );
   return Buffer.from(res.data);
 }
-
+ 
+// Convierte las paginas de un PDF en imagenes PNG (base64), ya que Gemma
+// solo acepta imagenes como entrada multimodal, no el PDF completo.
 async function pdfBufferToPageImages(buffer, maxPages) {
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
   const pdf = await loadingTask.promise;
@@ -103,15 +108,20 @@ async function pdfBufferToPageImages(buffer, maxPages) {
   const images = [];
   for (let i = 1; i <= numPages; i++) {
     const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale: 1.6 });
+    // Escala mas baja = imagenes mas livianas = menos memoria consumida
+    // (importante en el plan free de Render, que tiene poca RAM).
+    const viewport = page.getViewport({ scale: 1.3 });
     const canvas = createCanvas(viewport.width, viewport.height);
     const context = canvas.getContext('2d');
     await page.render({ canvasContext: context, viewport }).promise;
     images.push(canvas.toBuffer('image/png').toString('base64'));
+    // Liberamos referencias explicitamente para ayudar al recolector de basura.
+    context.clearRect(0, 0, viewport.width, viewport.height);
+    page.cleanup();
   }
   return { images, totalPages: pdf.numPages, pagesUsed: numPages };
 }
-
+ 
 function rankFiles(files, keywords) {
   return files
     .map(f => {
@@ -126,8 +136,9 @@ function rankFiles(files, keywords) {
     .sort((a, b) => b.score - a.score)
     .map(x => x.file);
 }
-
+ 
 // --- Soporte de multiples marcas ---
+// Lista las subcarpetas directas de ROOT_FOLDER_ID (cada una = una marca).
 async function listBrandFolders(drive) {
   if (!ROOT_FOLDER_ID) return [];
   try {
@@ -142,18 +153,21 @@ async function listBrandFolders(drive) {
     return [];
   }
 }
-
-const brandFileCache = new Map();
-
+ 
+const brandFileCache = new Map(); // folderId -> { files: [...], expiresAt }
+ 
+// Recorre recursivamente todas las subcarpetas de una marca y devuelve
+// todos los PDFs encontrados. Sin usar parentesis en las queries (la API
+// de Drive no los soporta bien para agrupar OR/AND).
 async function listPdfsUnderFolder(drive, rootFolderId) {
   const cached = brandFileCache.get(rootFolderId);
   if (cached && cached.expiresAt > Date.now()) return cached.files;
-
+ 
   const allFiles = [];
   let frontier = [rootFolderId];
   let depth = 0;
   const visitedFolders = new Set();
-
+ 
   while (frontier.length > 0 && depth < 8 && allFiles.length < 500) {
     const nextFrontier = [];
     for (const folderId of frontier) {
@@ -179,18 +193,22 @@ async function listPdfsUnderFolder(drive, rootFolderId) {
     frontier = nextFrontier;
     depth++;
   }
-
+ 
   brandFileCache.set(rootFolderId, { files: allFiles, expiresAt: Date.now() + BRAND_CACHE_TTL_MS });
   return allFiles;
 }
-
+ 
+// Convierte el historial guardado por el cliente (formato simple {role, content})
+// al formato de "contents" que espera la API de Gemini ({role, parts}).
 function historyToGeminiContents(history) {
   return history.map(turn => ({
     role: turn.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: turn.content }]
   }));
 }
-
+ 
+// Busqueda web propia usando Tavily (funciona con cualquier modelo, no
+// depende de que el modelo soporte "tool calling" de busqueda nativo).
 async function searchWeb(query) {
   const apiKey = process.env.TAVILY_API_KEY;
   if (!apiKey) return null;
@@ -216,7 +234,7 @@ async function searchWeb(query) {
     return null;
   }
 }
-
+ 
 async function generateWithRetry(baseParams, models, maxRetriesPerModel = 4) {
   let lastError;
   for (const model of models) {
@@ -227,22 +245,22 @@ async function generateWithRetry(baseParams, models, maxRetriesPerModel = 4) {
         lastError = e;
         const isOverloaded = e.message && (e.message.includes('"code":503') || e.message.includes('UNAVAILABLE'));
         if (isOverloaded && attempt < maxRetriesPerModel - 1) {
-          const waitMs = 2000 * (attempt + 1);
+          const waitMs = 2000 * (attempt + 1); // 2s, 4s, 6s, 8s...
           console.warn(`${model} saturado (503), reintentando en ${waitMs}ms (intento ${attempt + 1}/${maxRetriesPerModel})`);
           await new Promise(r => setTimeout(r, waitMs));
           continue;
         }
         if (isOverloaded) {
           console.warn(`${model} sigue saturado despues de ${maxRetriesPerModel} intentos, probando siguiente modelo si hay`);
-          break;
+          break; // pasa al siguiente modelo de la lista, si existe
         }
-        throw e;
+        throw e; // error que no es de saturacion: no tiene sentido reintentar
       }
     }
   }
   throw lastError;
 }
-
+ 
 app.get('/api/brands', async (req, res) => {
   try {
     const drive = getDriveClient();
@@ -253,33 +271,38 @@ app.get('/api/brands', async (req, res) => {
     res.json({ brands: [] });
   }
 });
-
+ 
 app.post('/api/chat', async (req, res) => {
   try {
     const { message, history = [], brandFolderId } = req.body;
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Falta el campo "message"' });
     }
-
+ 
     const drive = getDriveClient();
     const keywords = extractKeywords(message);
-
+ 
     let candidates = [];
     if (brandFolderId) {
+      // Con marca seleccionada: buscamos solo dentro de esa carpeta (cacheado).
       try {
         const brandFiles = await listPdfsUnderFolder(drive, brandFolderId);
         candidates = rankFiles(brandFiles, keywords).slice(0, 20);
+        // Si ninguna palabra clave matcheo bien, igual mandamos los mejores
+        // resultados en vez de nada (mejor un intento que ninguno).
       } catch (e) {
         console.error('Error buscando en la marca seleccionada:', e.message);
       }
     } else {
+      // Sin marca seleccionada: busqueda global en todo lo que el service
+      // account puede ver (comportamiento original).
       try {
         candidates = await searchDrivePdfs(drive, keywords);
       } catch (e) {
         console.error('Error buscando en Drive:', e.message);
       }
     }
-
+ 
     const seenNames = new Set();
     candidates = candidates.filter(f => {
       if (seenNames.has(f.name)) return false;
@@ -287,10 +310,13 @@ app.post('/api/chat', async (req, res) => {
       return true;
     });
     candidates = rankFiles(candidates, keywords).slice(0, MAX_DOCS_PER_QUERY);
-
+ 
+    // Convertimos cada PDF candidato en imagenes de pagina (Gemma no acepta
+    // PDF directamente, solo imagenes). Esto SI preserva diagramas, tablas
+    // y esquemas, porque cada pagina se manda como imagen real.
     const documentParts = [];
     const sources = [];
-
+ 
     for (const file of candidates) {
       try {
         const sizeBytes = file.size ? parseInt(file.size, 10) : 0;
@@ -316,7 +342,10 @@ app.post('/api/chat', async (req, res) => {
         console.error('Error leyendo/convirtiendo archivo', file.name, e.message);
       }
     }
-
+ 
+    // Si no encontramos ningun manual relevante en Drive, complementamos
+    // con busqueda web (funciona con cualquier modelo, no depende de
+    // "tool calling" nativo).
     let webResultsBlock = '';
     if (documentParts.length === 0) {
       const webResults = await searchWeb(message);
@@ -326,44 +355,45 @@ app.post('/api/chat', async (req, res) => {
           .join('\n');
       }
     }
-
+ 
     const systemPrompt = `Sos el asistente tecnico interno de Filsa, empresa de tratamiento de agua. Das soporte al equipo tecnico sobre los distintos equipos y marcas que Filsa distribuye (bombas dosificadoras, controladores, sensores y accesorios de varios fabricantes).
-
+ 
 Tenes dos fuentes de informacion disponibles:
 1. Los documentos PDF originales adjuntos a este mensaje (si hay alguno) - son los manuales reales de la marca/equipo correspondiente, con su texto, tablas, diagramas y esquemas completos. Esta es tu fuente PRINCIPAL y mas confiable para specs, procedimientos y troubleshooting.
 2. Resultados de busqueda web (si se incluyen mas abajo) - usalos para complementar cuando no haya documentos adjuntos relevantes.
-
+ 
 Respondé de forma directa y natural, combinando ambas fuentes segun corresponda, sin aclarar de cual proviene cada dato. Si el usuario no aclara la marca del equipo y hay ambiguedad entre varias marcas con productos similares, pedile que aclare el modelo o la marca antes de responder con datos tecnicos especificos. Si genuinamente no encontras informacion confiable en ningun lado, decilo con honestidad en vez de inventar valores tecnicos, rangos o procedimientos de seguridad.
-
+ 
 Se conciso, directo y accionable, como si hablaras con un tecnico que necesita resolver algo ahora. Usa listas numeradas para procedimientos paso a paso. Respondé siempre en español.${webResultsBlock}`;
-
+ 
     const currentTurnParts = [
       ...documentParts,
       { text: message }
     ];
-
+ 
     const contents = [
       ...historyToGeminiContents(history),
       { role: 'user', parts: currentTurnParts }
     ];
-
+ 
     const response = await generateWithRetry(
       { contents, config: { systemInstruction: systemPrompt } },
       [GEMINI_MODEL, GEMINI_FALLBACK_MODEL]
     );
-
+ 
     const replyText = response.text || 'No pude generar una respuesta.';
-
+ 
     res.json({ reply: replyText, sources });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || 'Error interno' });
   }
 });
-
+ 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
-
+ 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Soporte Tecnico Filsa (Gemini) escuchando en puerto ${PORT}`);
 });
+ 
